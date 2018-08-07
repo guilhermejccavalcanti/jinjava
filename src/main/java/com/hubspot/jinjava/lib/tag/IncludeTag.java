@@ -16,12 +16,8 @@
 package com.hubspot.jinjava.lib.tag;
 
 import java.io.IOException;
-
 import com.google.common.collect.ImmutableMap;
-import com.hubspot.jinjava.interpret.TemplateError.ErrorItem;
-import com.hubspot.jinjava.interpret.errorcategory.BasicTemplateErrorCategory;
 import org.apache.commons.lang3.StringUtils;
-
 import com.hubspot.jinjava.doc.annotations.JinjavaDoc;
 import com.hubspot.jinjava.doc.annotations.JinjavaParam;
 import com.hubspot.jinjava.doc.annotations.JinjavaSnippet;
@@ -29,6 +25,8 @@ import com.hubspot.jinjava.interpret.IncludeTagCycleException;
 import com.hubspot.jinjava.interpret.InterpretException;
 import com.hubspot.jinjava.interpret.JinjavaInterpreter;
 import com.hubspot.jinjava.interpret.TemplateError;
+import com.hubspot.jinjava.interpret.TemplateError.ErrorItem;
+import com.hubspot.jinjava.interpret.errorcategory.BasicTemplateErrorCategory;
 import com.hubspot.jinjava.interpret.TemplateError.ErrorReason;
 import com.hubspot.jinjava.interpret.TemplateError.ErrorType;
 import com.hubspot.jinjava.interpret.TemplateSyntaxException;
@@ -36,66 +34,47 @@ import com.hubspot.jinjava.tree.Node;
 import com.hubspot.jinjava.tree.TagNode;
 import com.hubspot.jinjava.util.HelperStringTokenizer;
 
-@JinjavaDoc(
-    value = "includes multiple files in one template or stylesheet",
-    params = {
-        @JinjavaParam(value = "path", desc = "Design Manager path to the file that you would like to include")
-    },
-    snippets = {
-        @JinjavaSnippet(code = "{% include \"custom/page/web_page_basic/my_footer.html\" %}"),
-        @JinjavaSnippet(code = "{% include \"generated_global_groups/2781996615.html\" %}"),
-        @JinjavaSnippet(code = "{% include \"hubspot/styles/patches/recommended.css\" %}")
-    })
+@JinjavaDoc(value = "includes multiple files in one template or stylesheet", params = { @JinjavaParam(value = "path", desc = "Design Manager path to the file that you would like to include") }, snippets = { @JinjavaSnippet(code = "{% include \"custom/page/web_page_basic/my_footer.html\" %}"), @JinjavaSnippet(code = "{% include \"generated_global_groups/2781996615.html\" %}"), @JinjavaSnippet(code = "{% include \"hubspot/styles/patches/recommended.css\" %}") })
 public class IncludeTag implements Tag {
-  private static final long serialVersionUID = -8391753639874726854L;
 
-  @Override
-  public String interpret(TagNode tagNode, JinjavaInterpreter interpreter) {
-    HelperStringTokenizer helper = new HelperStringTokenizer(tagNode.getHelpers());
-    if (!helper.hasNext()) {
-      throw new TemplateSyntaxException(tagNode.getMaster().getImage(), "Tag 'include' expects template path", tagNode.getLineNumber());
+    private static final long serialVersionUID = -8391753639874726854L;
+
+    @Override
+    public String interpret(TagNode tagNode, JinjavaInterpreter interpreter) {
+        HelperStringTokenizer helper = new HelperStringTokenizer(tagNode.getHelpers());
+        if (!helper.hasNext()) {
+            throw new TemplateSyntaxException(tagNode.getMaster().getImage(), "Tag 'include' expects template path", tagNode.getLineNumber());
+        }
+        String path = StringUtils.trimToEmpty(helper.next());
+        String templateFile = interpreter.resolveString(path, tagNode.getLineNumber());
+        try {
+            interpreter.getContext().getIncludePathStack().push(templateFile, tagNode.getLineNumber());
+        } catch (IncludeTagCycleException e) {
+            interpreter.addError(new TemplateError(ErrorType.WARNING, ErrorReason.EXCEPTION, ErrorItem.TAG, "Include cycle detected for path: '" + templateFile + "'", null, tagNode.getLineNumber(), e, BasicTemplateErrorCategory.INCLUDE_CYCLE_DETECTED, ImmutableMap.of("path", templateFile)));
+            return "";
+        }
+        try {
+            String template = interpreter.getResource(templateFile);
+            Node node = interpreter.parse(template);
+            interpreter.getContext().addDependency("coded_files", templateFile);
+            JinjavaInterpreter child = new JinjavaInterpreter(interpreter);
+            String result = child.render(node);
+            interpreter.getErrors().addAll(child.getErrors());
+            return result;
+        } catch (IOException e) {
+            throw new InterpretException(e.getMessage(), e, tagNode.getLineNumber());
+        } finally {
+            interpreter.getContext().getIncludePathStack().pop();
+        }
     }
 
-    String path = StringUtils.trimToEmpty(helper.next());
-    String templateFile = interpreter.resolveString(path, tagNode.getLineNumber());
-
-    try {
-      interpreter.getContext().pushIncludePath(templateFile, tagNode.getLineNumber());
-    } catch (IncludeTagCycleException e) {
-      interpreter.addError(new TemplateError(ErrorType.WARNING, ErrorReason.EXCEPTION, ErrorItem.TAG,
-          "Include cycle detected for path: '" + templateFile + "'", null, tagNode.getLineNumber(), e,
-          BasicTemplateErrorCategory.INCLUDE_CYCLE_DETECTED, ImmutableMap.of("path", templateFile)));
-      return "";
+    @Override
+    public String getEndTagName() {
+        return null;
     }
 
-    try {
-      String template = interpreter.getResource(templateFile);
-      Node node = interpreter.parse(template);
-
-      interpreter.getContext().addDependency("coded_files", templateFile);
-
-      JinjavaInterpreter child = new JinjavaInterpreter(interpreter);
-      String result = child.render(node);
-
-      interpreter.getErrors().addAll(child.getErrors());
-
-      return result;
-
-    } catch (IOException e) {
-      throw new InterpretException(e.getMessage(), e, tagNode.getLineNumber());
-    } finally {
-      interpreter.getContext().popIncludePath();
+    @Override
+    public String getName() {
+        return "include";
     }
-  }
-
-  @Override
-  public String getEndTagName() {
-    return null;
-  }
-
-  @Override
-  public String getName() {
-    return "include";
-  }
-
 }
